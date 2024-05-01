@@ -1,0 +1,234 @@
+---
+title: "LSCA - Lettuce - ARIMA - Store 4904"
+author: "Agnes Martha"
+date: "2024-03-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(readxl)
+library(forecast)
+library(tseries)
+library(ggplot2)
+```
+
+#### 1. Data Importing
+
+Here we will import the data for store 4904.
+
+```{r}
+lettuce <- read_excel("/Users/agnes/Downloads/LSCA/Individual Project/sub-recipe data.xlsx", sheet = "store 4904")
+lettuce = lettuce[, c(1, 4)]
+lettuce
+```
+
+#### 2. Simple Plotting
+
+To get a clear idea on the data set, we will plot it as below.
+
+```{r}
+# Ensure the Date column is in Date format
+lettuce$Date <- as.Date(lettuce$Date)
+
+# Create the plot
+ggplot(data = lettuce, aes(x = Date, y = `Total Lettuce per Day`)) + 
+  geom_line() +  # Use geom_line for a line plot
+  labs(x = "Date", y = "Total Lettuce per Day", title = "Lettuce Demand") +
+  theme_minimal() +
+  scale_x_date(date_breaks = "1 day", date_labels = "%d-%m-%Y") + # Format the x-axis for daily dates
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 5)) # Tilt and make the date labels smaller
+
+```
+#### 3. Turning into Time Series
+
+```{r}
+
+lettuce$Date <- as.Date(lettuce$Date, format = "%d %B %Y")
+
+# Ensure 'Total Lettuce per Day' is numeric
+lettuce$`Total Lettuce per Day` <- as.numeric(lettuce$`Total Lettuce per Day`)
+
+# Assuming daily data with potential weekly seasonality
+ts_lettuce <- ts(lettuce$`Total Lettuce per Day`, frequency = 7, start = c(2015, as.numeric(format(min(lettuce$Date), "%j"))))
+
+# Try STL decomposition with a specified seasonal window instead of 'periodic'
+stl_fit <- stl(ts_lettuce, s.window = 7)  # Assuming a weekly seasonality, adjust as necessary
+
+# Plot the STL decomposition
+autoplot(stl_fit)
+
+```
+In this step we will identify the start and end time of the time series.
+
+```{r}
+start(ts_lettuce)
+end(ts_lettuce)
+```
+
+#### 4. Training - Test - Split
+
+```{r}
+# Setting the training data
+ts_lettuce.train <- window(ts_lettuce, end = c(2030, 1))
+
+# Setting the testing data
+ts_lettuce.test <- window(ts_lettuce, start = c(2030, 2))
+```
+
+#### 5. Choice of d and D 
+
+```{r}
+# Take the first order difference
+ts_lettuce.diff1 <- diff(ts_lettuce.train, differences = 1)
+
+# Plot the differenced series
+autoplot(ts_lettuce.diff1)
+```
+
+#### 6. Stationary Test
+
+```{r}
+adf.test(ts_lettuce.diff1)
+pp.test(ts_lettuce.diff1)
+kpss.test(ts_lettuce.diff1)
+ndiffs(ts_lettuce.diff1)
+```
+
+#### 7. Seasonal Stationarity
+
+```{r}
+# seasonal stationarity, s stand for seasonality
+nsdiffs(ts_lettuce.train)
+```
+
+#### 8. Choice of p, q, P, and Q
+
+```{r}
+# acf plot
+ggAcf(ts_lettuce.diff1)
+
+# Assuming you have already computed the ACF for your differenced series:
+acf_result <- acf(ts_lettuce.diff1, plot = FALSE)
+
+# The acf_result object contains the autocorrelation values and confidence interval
+# Extract the autocorrelation values
+acf_values <- acf_result$acf
+
+# The confidence interval is typically set at 95%, which corresponds to roughly 2 standard deviations
+# from the mean in a normal distribution. We can compute the critical value for the 95% CI as:
+critical_value <- qnorm((1 + 0.95) / 2) / sqrt(length(ts_lettuce.diff1))
+
+# Now, find which lags have autocorrelation values outside this confidence interval
+significant_lags <- which(abs(acf_values) > critical_value)
+
+# Print the significant lags
+print(significant_lags)
+
+# If you need to see the values that cross the upper confidence limit
+cross_upper <- which(acf_values > critical_value)
+
+# If you need to see the values that cross the lower confidence limit
+cross_lower <- which(acf_values < -critical_value)
+
+# Print lags that cross the upper confidence limit
+print(cross_upper)
+
+# Print lags that cross the lower confidence limit
+print(cross_lower)
+
+```
+
+```{r}
+# pacf plot
+ggPacf(ts_lettuce.diff1)
+
+# Assuming you have already computed the PACF for your differenced series:
+pacf_result <- pacf(ts_lettuce.diff1, plot = FALSE)
+
+# The pacf_result object contains the partial autocorrelation values
+# Extract the partial autocorrelation values
+pacf_values <- pacf_result$acf  # Note: the name of the list element will still be 'acf'
+
+# The confidence interval for PACF can also be computed similarly
+critical_value_pacf <- qnorm((1 + 0.95) / 2) / sqrt(length(ts_lettuce.diff1))
+
+# Find which lags have partial autocorrelation values outside this confidence interval
+significant_lags_pacf <- which(abs(pacf_values) > critical_value_pacf)
+
+# Print the significant lags for PACF
+print(significant_lags_pacf)
+
+# If you need to see the values that cross the upper confidence limit for PACF
+cross_upper_pacf <- which(pacf_values > critical_value_pacf)
+
+# If you need to see the values that cross the lower confidence limit for PACF
+cross_lower_pacf <- which(pacf_values < -critical_value_pacf)
+
+# Print lags that cross the upper confidence limit for PACF
+print(cross_upper_pacf)
+
+# Print lags that cross the lower confidence limit for PACF
+print(cross_lower_pacf)
+
+```
+#### 9. Choosing the ARIMA Model
+
+```{r}
+# choose optimal p and q based on information criteria
+auto.arima(ts_lettuce.train, d = 1, trace = TRUE) 
+```
+
+#### 10. Candidate Model
+
+```{r}
+ts_lettuce.model <- Arima(ts_lettuce.train, order = c(0, 1, 2), seasonal = list(order = c(1, 1, 0), period = 7), include.drift = TRUE)
+```
+
+#### 11. Residual Analysis
+
+```{r}
+checkresiduals(ts_lettuce.model)
+```
+
+#### 12. Model Evaluation
+
+Here we will produce the actual forecast for our data for the next 14 days.
+
+```{r}
+ts_lettuce.forecast <- forecast(ts_lettuce.model, h = 14)
+ts_lettuce.forecast
+```
+
+#### 13. Out of Sample Performances
+
+In this part we will measure the accuracy of our forecast by comparing our forecasted value and test data.
+
+```{r}
+
+accuracy(ts_lettuce.forecast, ts_lettuce.test)
+
+```
+
+#### 14. Re-calibrate
+
+By including the whole data set from the model, we will run it again.
+
+```{r}
+ts_lettuce.model2 <- Arima(ts_lettuce, order = c(0, 1, 2), seasonal = list(order = c(1, 1, 0), period = 7), include.drift = TRUE)
+```
+
+#### 15. Actual Forecast
+
+And the final forecast.
+
+```{r}
+ts_lettuce.forecast2 <- forecast(ts_lettuce.model2, h = 14)
+autoplot(ts_lettuce.forecast2)
+ts_lettuce.forecast2
+```
+The next analysis by using Holt-Winter will be explained in another file.
